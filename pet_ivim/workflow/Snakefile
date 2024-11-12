@@ -1,6 +1,12 @@
-from snakebids import bids, generate_inputs, get_wildcard_constraints
+from snakebids import (
+    bids,
+    filter_list,
+    generate_inputs,
+    get_wildcard_constraints,
+)
 
-configfile: 'config/snakebids.yml'
+
+configfile: "config/snakebids.yml"
 
 # Get input wildcards
 inputs = generate_inputs(
@@ -14,26 +20,136 @@ inputs = generate_inputs(
     validate=not config.get("plugins.validator.skip", False)
 )
 
+# ---- begin snakebids boilerplate ----------------------------------------------
 
+
+
+
+# Workflow setup
+include: "rules/setup.smk"
+
+rule import_data:
+    input:
+        t1w=lambda wildcards: expand(
+            input_path["T1w"],
+            zip,
+            **filter_list(input_zip_lists["T1w"], wildcards),
+        )[0],
+    output:
+        out_t1w=bids(
+            root=work,
+            datatype="anat",
+            suffix="T1w.nii.gz",
+            **subj_wildcards,
+        ),
+    group:
+        "subj"
+    shell:
+        "cp {input.t1w} {output.out_t1w}"
+
+rule segment_t1:
+    input:
+        t1w=rules.import_data.output.out_t1w,
+    output:
+        t1_seg=bids(
+            root=work,
+            datatype="anat",
+            space="orig",
+            label="wholebrain",
+            suffix="probseg.nii.gz",
+            **subj_wildcards,
+        ),
+    params:
+        out_dir=bids(root=work, **subj_wildcards),
+    resources:
+        mem_mb=32000,
+        runtime=60,
+        disk_mb=8000
+    threads: 8
+    container:
+        config["singularity"]["freesurfer"]
+    group:
+        "subj"
+    shell:
+        "mri_synthseg --i {input.t1w} --o {output.t1_seg} --parc --threads {threads} --cpu"
+
+rule mask_b0:
+    input:
+        b0=bids(
+            root=config["in_ivim_dir"],
+            datatype="dwi",
+            space="T1w",
+            desc="dwiref",
+            suffix="avgb0_test.nii.gz",
+            **subj_wildcards
+        ),
+    output:
+        mask=bids(
+            root=work,
+            suffix="avgb0_mask.nii.gz",
+            method="synthstrip",
+            space="T1w",
+            desc="dwiref",
+            datatype="dwi",
+            **subj_wildcards,
+        ),
+    resources:
+        mem_mb=16000
+    threads: 8
+    container:
+        config["singularity"]["freesurfer"]
+    group:
+        "subj"
+    shell:
+        "mri_synthstrip -i {input} -m {output}"
+
+rule avg_by_roi:
+    input:
+        t1_seg=rules.segment_t1.output.t1_seg,
+        mean_ivim_csv=bids(
+            root=config["in_ivim_dir"],
+            suffix="mean-ivimfit.csv",
+            **subj_wildcards
+        ),
+        mask=rules.mask_b0.output.mask,
+        label_lookup=os.path.join(workflow.basedir, config["synthseg_label_lookup"]),
+    output:
+        avg_csv=bids(
+            root=work,
+            suffix="avg_by_roi.csv",
+            **subj_wildcards,
+        ),
+    params:
+        out_dir=bids(
+            root=work,
+            **subj_wildcards,
+        ),
+        ivim_work=config["in_ivim_dir"],
+    group:
+        "subj"
+    script:
+        "./scripts/avg_by_roi.py"
+
+rule concat_csv:
+    input:
+        avg_csv=expand(bids(
+            root=work,
+            suffix="avg_by_roi.csv",
+            **subj_wildcards,
+        ),
+        zip,
+        **subj_zip_list
+        )
+    output:
+        concat_csv_files='results/concatted_csv_files.csv'
+
+    params: 
+        algorithms = config['algo_names']
+
+    group:
+        "group"
+    script:
+        "./scripts/concat_csv.py"
 rule all:
     input:
-        inputs['t1w'].expand(),
-        inputs['bold'].expand()
-    default_target: True
-    params:
-        inputs=lambda wcards, input: "- " + "\n- ".join(input)
-    shell:
-        """
-        cat <<EOF
-All set 🚀🚀!
-
-To get going, replace this \`rule all\` block with your own and start adding some rules.
-
-If you need help, check out the tutorial:
-    https://snakebids.readthedocs.io/en/stable/tutorial/tutorial.html
-
-Found the following inputs:
-{params.inputs}
-
-EOF
-        """
+        concat_csv_files='results/concatted_csv_files.csv'

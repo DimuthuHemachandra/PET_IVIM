@@ -1,7 +1,31 @@
+
 #list of analysis levels in the bids app
 analysis_levels:
  - participant
 
+pybids_inputs:
+  dwi:
+    filters:
+      suffix: "dwi"
+      extension: ".nii.gz"
+      invalid_filters: "allow"
+      datatype: "dwi"
+    wildcards:
+      - subject
+      - acquisition
+      - run
+      - direction
+
+  T1w:
+    filters:
+      suffix: "T1w"
+      extension: ".nii.gz"
+      datatype: "anat"
+      #desc: "brain" # Require a skull-stripped brain
+      #part: ["mag", false]
+    wildcards:
+      - subject
+      #- run
 
 # mapping from analysis_level to set of target rules or files
 targets_by_analysis_level:
@@ -15,18 +39,7 @@ targets_by_analysis_level:
 # single value or list of values to select.
 # Wildcards are used to mark variable parts of paths. Each wildcard is an
 # entity, such as `subject` or `session`, that may vary across component paths.
-pybids_inputs:
-  t1w:
-    filters:
-      suffix: T1w
-    wildcards:
-      - subject
-  bold:
-    filters:
-      suffix: bold
-    wildcards:
-      - subject
-      - run
+
 
 # configuration for the command-line parameters to make available
 # passed on the argparse add_argument()
@@ -39,9 +52,30 @@ parse_args:
     dest: "plugins.validator.skip"
     action: "store_true"
     default: False
+  --in_ivim_dir:
+    help: 'Specify the path to the derivatives from ivim pipeline'
+    default: False
+    type: Path
 
 
 
 # Docker and singularity containers may be defined here
-containers:
-    # fsl: 'docker://brainlife/fsl/6.0.0'
+singularity:
+  #ants: 'docker://kaczmarj/ants:2.3.4'
+  #itksnap: 'docker://khanlab/itksnap:latest'
+  freesurfer: 'docker://freesurfer/freesurfer:7.4.1'
+  #fsl: 'docker://fnndsc/fsl:6.0.4-cuda9.1'
+
+root: 'results'
+work: 'work'
+
+synthseg_label_lookup: resources/synthseg_cortparc_labels.tsv
+
+algo_names:
+  - 'IAR_LU_biexp'
+  - 'OGC_AmsterdamUMC_biexp_segmented'
+  
+execution:
+  slurm:
+    sbatch_exec: /usr/bin/sbatch
+    sbatch_args: "-p general -n 8 -t 1:00:00"
